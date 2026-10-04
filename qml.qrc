@@ -1,0 +1,17 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qtquickcontrols2.conf</file>
+        <file>icons/pinyin.png</file>
+        <file>qml/main.qml</file>
+        <file>qml/MessageBar.qml</file>
+        <file>qml/Segment.qml</file>
+        <file>qml/InsertPoint.qml</file>
+        <file>qml/MessageListPanel.qml</file>
+        <file>qml/InlinePanel.qml</file>
+        <file>qml/KeyCap.qml</file>
+        <file>qml/ToolActionButton.qml</file>
+        <file>qml/TitleBar.qml</file>
+        <file>qml/WindowButton.qml</file>
+        <file>qml/LayoutMath.js</file>
+    </qresource>
+</RCC>

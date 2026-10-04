@@ -1,0 +1,4 @@
+# 构建产物与本地个人笔记不入库
+artifacts/
+.remember/
+*.user
