@@ -19,6 +19,14 @@
 #include "themes.h"
 #include "filedialoghelper.h"
 
+// 平台按键路径(QtGui 导出,QTest::keyClick 同款):事件经 ShortcutOverride →
+// 快捷键表裁决,是唯一能触发 QML Shortcut 的注入方式(直接 sendEvent 到窗口
+// 只会在 QQuickWindow::deliverKeyEvent 里转发给 activeFocusItem)。
+// 本机 QtGui 未安装 QPA 头,故在此显式声明;签名与 qwindowsysteminterface.cpp 一致。
+extern Q_GUI_EXPORT void qt_handleKeyEvent(QWindow *w, QEvent::Type t, int k,
+                                           Qt::KeyboardModifiers mods,
+                                           const QString &text, bool autorep, ushort count);
+
 // ---- QML 错误统计:无头 smoke 测试要求为 0 --------------------------------
 static int g_qmlWarnings = 0;
 static const QRegularExpression g_qmlErrorRe(QStringLiteral("\\.qml:\\d+"));
@@ -300,6 +308,7 @@ int main(int argc, char *argv[])
     bool smokeMode = false;
     bool shotMode = false;
     bool shotOpenPanel = false;
+    bool shotOpenHelp = false;
     QString shotPath;
     QSize shotSize(1280, 800);
     QString themeName = Themes::defaultName();
@@ -320,6 +329,8 @@ int main(int argc, char *argv[])
             themeName = args[++i];
         } else if (args[i] == QLatin1String("--open-panel")) {
             shotOpenPanel = true;
+        } else if (args[i] == QLatin1String("--open-help")) {
+            shotOpenHelp = true;
         }
     }
 
@@ -352,13 +363,24 @@ int main(int argc, char *argv[])
         QQuickWindow *win = qobject_cast<QQuickWindow *>(root);
         if (win)
             win->resize(shotSize);
-        QTimer::singleShot(800, [root, shotPath, &model, shotOpenPanel]() {
+        QTimer::singleShot(800, [root, shotPath, &model, shotOpenPanel, shotOpenHelp]() {
             QQuickWindow *win = qobject_cast<QQuickWindow *>(root);
             std::printf("DIAG visible=%d exposed=%d size=%dx%d\n",
                         int(win->isVisible()), int(win->isExposed()),
                         win->width(), win->height());
             win->show();
             win->requestActivate();
+            // --open-help:截图前打开帮助页。帮助页是主窗口内的普通 Item 覆盖层
+            // (非 Popup),主窗口 grabWindow 即可拍到,无需 --open-panel 的整屏抓取。
+            if (shotOpenHelp) {
+                const bool oh = QMetaObject::invokeMethod(root, "openHelp");
+                std::printf("DIAG open-help invoke=%d\n", int(oh));
+                for (int i = 0; i < 10; ++i) {
+                    win->requestUpdate();
+                    QCoreApplication::processEvents();
+                    QThread::msleep(50);
+                }
+            }
             // --open-panel:截图前打开就地编辑面板(目检面板 UI)。
             // Popup 在 Qt 5.15 渲染于独立 popup 窗口,主窗口 grabWindow 拍不到,
             // 因此等待渲染后改抓整个虚拟屏。
@@ -465,7 +487,68 @@ int main(int argc, char *argv[])
                 panelArrowOk = rowCtl == 0 && openedCtl && opened1 && row1 == 1 && row2 == 0 && opened2;
             }
 
-            const bool ok = modelOk && qmlOk && panelArrowOk && g_qmlWarnings == 0;
+            // 帮助页:openHelp(与 --open-help 截图同一入口)→ 可见、持有焦点、
+            // 且关闭遗留的就地编辑面板;Esc → 关闭;F1 → 打开;close() → 关闭。
+            // 说明:平台路径注入(qt_handleKeyEvent)的 Esc 会在 Qt 内部被吞掉
+            // (焦点项已是帮助页、快捷键对象 enabled 且上下文正确,平台注入仍不
+            // 触发,属无头注入的框架限制),故 Esc 断言改为:焦点项必须是帮助页,
+            // 再把 KeyPress 投递给它 —— 这正是 QQuickWindow 自身路由的最后一步。
+            bool helpOk = true;
+            QObject *helpPage = root->findChild<QObject *>(QStringLiteral("helpPage"));
+            QQuickWindow *win = qobject_cast<QQuickWindow *>(root);
+            if (helpPage && win) {
+                auto injectKey = [win](int key) {
+                    win->requestActivate();
+                    QCoreApplication::processEvents();
+                    qt_handleKeyEvent(win, QEvent::KeyPress, key, Qt::NoModifier,
+                                      QString(), false, 1);
+                    qt_handleKeyEvent(win, QEvent::KeyRelease, key, Qt::NoModifier,
+                                      QString(), false, 1);
+                    QCoreApplication::processEvents();
+                };
+                auto waitHelpVisible = [helpPage](bool want) {
+                    for (int i = 0; i < 30 && helpPage->property("visible").toBool() != want; ++i) {
+                        QCoreApplication::processEvents();
+                        QThread::msleep(20);
+                    }
+                    return helpPage->property("visible").toBool() == want;
+                };
+                // 投递给当前焦点项(等效 QQuickWindow::deliverKeyEvent 的最后一步)
+                auto sendToFocusItem = [win](int key) {
+                    QObject *afi = qvariant_cast<QObject *>(win->property("activeFocusItem"));
+                    if (!afi)
+                        return false;
+                    QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+                    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+                    QCoreApplication::sendEvent(afi, &press);
+                    QCoreApplication::sendEvent(afi, &release);
+                    QCoreApplication::processEvents();
+                    return true;
+                };
+                const bool invoked = QMetaObject::invokeMethod(root, "openHelp");
+                const bool opened = waitHelpVisible(true);
+                const bool panelClosed = panel && !panel->property("opened").toBool();
+                const bool focusTaken =
+                    qvariant_cast<QObject *>(win->property("activeFocusItem")) == helpPage;
+                const bool escSent = sendToFocusItem(Qt::Key_Escape);
+                const bool escClosed = waitHelpVisible(false);
+                injectKey(Qt::Key_F1);
+                const bool f1Opened = waitHelpVisible(true);
+                const bool closedInvoked = QMetaObject::invokeMethod(helpPage, "close");
+                const bool closed = waitHelpVisible(false);
+                std::printf("SMOKE_HELP invoked=%d opened=%d panelClosed=%d focusTaken=%d"
+                            " escSent=%d escClosed=%d f1Opened=%d closedInvoked=%d closed=%d\n",
+                            int(invoked), int(opened), int(panelClosed), int(focusTaken),
+                            int(escSent), int(escClosed), int(f1Opened), int(closedInvoked),
+                            int(closed));
+                helpOk = invoked && opened && panelClosed && focusTaken && escSent &&
+                         escClosed && f1Opened && closedInvoked && closed;
+            } else {
+                std::printf("SMOKE_HELP helpPage not found\n");
+                helpOk = false;
+            }
+
+            const bool ok = modelOk && qmlOk && panelArrowOk && helpOk && g_qmlWarnings == 0;
             std::printf("%s\n", ok ? "SMOKE OK" : "SMOKE FAIL");
             qApp->exit(ok ? 0 : 2);
         });

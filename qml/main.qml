@@ -115,6 +115,16 @@ ApplicationWindow {
         inlinePanel.openAt(p.x, p.y)
     }
 
+    // ---- 帮助页 --------------------------------------------------------
+    // 打开前先关闭就地编辑面板与类型筛选框:两者会抢占焦点并消费 Esc/方向键
+    function openHelp() {
+        if (inlinePanel.opened)
+            inlinePanel.close()
+        if (typeFilterPopup.opened)
+            typeFilterPopup.close()
+        helpPage.open()   // 覆盖层持有焦点,自行处理 Esc
+    }
+
     // ---- smoke 自测入口(由 main.cpp --smoke 调用)--------------------
     function smokeCheck() {
         var fails = []
@@ -192,6 +202,25 @@ ApplicationWindow {
         var aexp = "0:14.0,0.0;1:46.0,0.0;2:14.0,110.0;3:26.0,110.0"
         var arep = bar.anchorReport()
         if (arep !== aexp) fails.push("anchors got=[" + arep + "] want=[" + aexp + "]")
+
+        // 帮助页:打开 → 可见且正文非空;F1/Esc 快捷键接线 → 激活即开关
+        // (无头环境下合成按键不进入 Qt 快捷键表,故直接断言快捷键对象状态,
+        //  并用 activated() 模拟激活 —— 与用户按键共用同一条 onActivated 路径)
+        win.openHelp()
+        if (!helpPage.visible) fails.push("helpPage 未打开")
+        if (helpPage.sections.length !== 6) fails.push("helpPage sections=" + helpPage.sections.length)
+        if (helpPage.shortcuts.length !== 13) fails.push("helpPage shortcuts=" + helpPage.shortcuts.length)
+        if (helpPage.bodyText.indexOf("基本概念") < 0) fails.push("helpPage 缺少基本概念章节")
+        if (helpPage.bodyText.indexOf("快捷键") < 0) fails.push("helpPage 缺少快捷键章节")
+        if (helpPage.bodyText.indexOf("拖动重排") < 0) fails.push("helpPage 缺少拖动说明")
+        if (!escShortcut.enabled) fails.push("帮助页打开时 Esc 快捷键应启用")
+        escShortcut.activated()
+        if (helpPage.visible) fails.push("Esc 快捷键未关闭帮助页")
+        if (escShortcut.enabled) fails.push("帮助页关闭后 Esc 快捷键应禁用")
+        f1Shortcut.activated()
+        if (!helpPage.visible) fails.push("F1 快捷键未打开帮助页")
+        helpPage.close()
+        if (helpPage.visible) fails.push("helpPage 未关闭")
 
         if (fails.length > 0)
             return "FAIL " + fails.join(" | ")
@@ -283,6 +312,13 @@ ApplicationWindow {
                         messageModel.selectedRow = 0
                     }
                 }
+                ToolSeparator { }
+                ToolActionButton {
+                    caption: "帮助"
+                    keyCaps: ["F1"]
+                    tooltipText: "使用帮助 (F1)"
+                    onClicked: helpPage.visible ? helpPage.close() : win.openHelp()
+                }
                 Item { Layout.fillWidth: true }
                 Label {
                     text: "悬停柱状图上方可插入 + | 右键分段弹出菜单"
@@ -338,7 +374,7 @@ ApplicationWindow {
                 MessageBar {
                     id: bar
                     viewportWidth: sv.width
-                    inputFilterEnabled: !inlinePanel.opened
+                    inputFilterEnabled: !inlinePanel.opened && !helpPage.visible
                     onTypeInputStarted: typeFilterPopup.openWith(initialText)
                     onInlineEditRequested: {
                         messageModel.selectedRow = fieldIndex
@@ -385,32 +421,33 @@ ApplicationWindow {
     MouseArea { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 5; cursorShape: Qt.SizeHorCursor; onPressed: win.startSystemResize(Qt.RightEdge) }
 
     // ---- 快捷键 --------------------------------------------------------
-    Shortcut { sequence: StandardKey.New; onActivated: win.doNew() }
-    Shortcut { sequence: StandardKey.Open; onActivated: win.doOpen() }
-    Shortcut { sequence: StandardKey.Save; onActivated: win.doSave() }
-    Shortcut { sequence: "Ctrl+Shift+S"; onActivated: win.doSaveAs() }
+    // 帮助页打开时(Esc 除外)全部禁用,避免误改遮罩后的报文
+    Shortcut { sequence: StandardKey.New; enabled: !helpPage.visible; onActivated: win.doNew() }
+    Shortcut { sequence: StandardKey.Open; enabled: !helpPage.visible; onActivated: win.doOpen() }
+    Shortcut { sequence: StandardKey.Save; enabled: !helpPage.visible; onActivated: win.doSave() }
+    Shortcut { sequence: "Ctrl+Shift+S"; enabled: !helpPage.visible; onActivated: win.doSaveAs() }
     Shortcut {
         sequences: [StandardKey.Delete]
         enabled: messageModel.selectedRow >= 0 && messageModel.count > 1 &&
-                 !inlinePanel.anyEditorFocused
+                 !inlinePanel.anyEditorFocused && !helpPage.visible
         onActivated: messageModel.removeField(messageModel.selectedRow)
     }
     Shortcut {
         sequence: "Alt+Left"
-        enabled: messageModel.selectedRow > 0
+        enabled: messageModel.selectedRow > 0 && !helpPage.visible
         onActivated: messageModel.moveField(messageModel.selectedRow, -1)
     }
     Shortcut {
         sequence: "Alt+Right"
         enabled: messageModel.selectedRow >= 0 &&
-                 messageModel.selectedRow < messageModel.count - 1
+                 messageModel.selectedRow < messageModel.count - 1 && !helpPage.visible
         onActivated: messageModel.moveField(messageModel.selectedRow, 1)
     }
     // ↑/↓:切换上一个/下一个报文;←/→:切换上一个/下一个字段
     Shortcut {
         sequence: "Up"
         enabled: messageModel.currentMessageIndex > 0 &&
-                 !inlinePanel.opened && !typeFilterPopup.opened
+                 !inlinePanel.opened && !typeFilterPopup.opened && !helpPage.visible
         onActivated: {
             messageModel.setCurrentMessage(messageModel.currentMessageIndex - 1)
             messageModel.selectedRow = 0
@@ -419,7 +456,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Down"
         enabled: messageModel.currentMessageIndex < messageModel.messageCount - 1 &&
-                 !inlinePanel.opened && !typeFilterPopup.opened
+                 !inlinePanel.opened && !typeFilterPopup.opened && !helpPage.visible
         onActivated: {
             messageModel.setCurrentMessage(messageModel.currentMessageIndex + 1)
             messageModel.selectedRow = 0
@@ -429,14 +466,25 @@ ApplicationWindow {
     Shortcut {
         sequence: "Left"
         enabled: messageModel.selectedRow > 0 &&
-                 !inlinePanel.opened && !typeFilterPopup.opened
+                 !inlinePanel.opened && !typeFilterPopup.opened && !helpPage.visible
         onActivated: win.selectField(messageModel.selectedRow - 1)
     }
     Shortcut {
         sequence: "Right"
         enabled: messageModel.selectedRow < messageModel.count - 1 &&
-                 !inlinePanel.opened && !typeFilterPopup.opened
+                 !inlinePanel.opened && !typeFilterPopup.opened && !helpPage.visible
         onActivated: win.selectField(messageModel.selectedRow + 1)
+    }
+    // F1 打开帮助;仅帮助页可见时 Esc 才接管(避免抢占就地编辑面板的 Esc)。
+    // 用 ApplicationShortcut:Popup 是独立子窗口,占焦点时 WindowShortcut 的
+    // 上下文匹配(obj == focusWindow 严格相等)会失配 —— 弹窗打开时 F1/Esc 会失灵
+    Shortcut { id: f1Shortcut; sequence: "F1"; context: Qt.ApplicationShortcut; onActivated: win.openHelp() }
+    Shortcut {
+        id: escShortcut
+        sequence: "Escape"
+        context: Qt.ApplicationShortcut
+        enabled: helpPage.visible
+        onActivated: helpPage.close()
     }
 
     // ---- 就地属性编辑面板(点击段后在段附近弹出)-----------------------
@@ -603,5 +651,12 @@ ApplicationWindow {
             wrapMode: Text.Wrap
             text: messageModel.lastError
         }
+    }
+
+    // ---- 帮助页(窗口内覆盖层,非 Popup;声明在最后 → 位于内容区顶层)----
+    HelpPage {
+        id: helpPage
+        // 关闭后把焦点还给柱状图(方向键切换字段/键入筛选依赖它)
+        onClosed: bar.forceActiveFocus()
     }
 }

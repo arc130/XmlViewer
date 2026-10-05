@@ -42,7 +42,12 @@
     id 或中文标签;↑↓ 选择、Enter 选中、Esc 关闭、鼠标点击列表项直接应用)
   - 右键分段 → 在此前/后插入、删除、左移、右移
   - 单击选中(黄色描边);右侧属性面板与就地面板共享同一模型、实时同步
-  - 快捷键:Del 删除、Alt+↑/↓ 移动、↑/↓ 切换选中、Ctrl+N/O/S 文件操作
+  - 快捷键:Del 删除、Alt+←/→ 移动字段、←/→ 切换字段(并打开编辑面板)、
+    ↑/↓ 切换报文、Ctrl+N/O/S 文件操作
+- **帮助页(F1 / 工具栏"帮助")**:窗口内覆盖层(非 Popup,便于无头截图校验),
+  六节中文使用说明(基本概念 / 报文管理 / 编辑字段 / 选择与调整 / 文件与视图 /
+  快捷键总表,键帽用 KeyCap 渲染);Esc、✕、点击遮罩均可关闭,打开时自动
+  关闭就地编辑面板与类型筛选框,关闭后焦点还给柱状图
 - 位偏移自动派生:字段 N 的位偏移 = 前序字段位长之和(纯打包位流,无对齐填充)
 - 保存/加载 JSON 结构文件;未保存更改提示;未知类型降级为自定义位长(向前兼容)
 
@@ -73,6 +78,16 @@
 4. **模型信号时序**:位偏移缓存失效必须在任何模型信号之前(曾致加载后首行消失)
 5. **嵌套 hover 可见性须把自身 hover 计入**(曾致加号闪烁)
 6. 位域字节完整覆盖由模型自动维护(占位字段可转为有效位域)
+7. **帮助页为何不用 Popup**:Qt 5.15 的 Popup 渲染在独立子窗口,主窗口
+   `grabWindow` 拍不到,且无头 xvfb 下背景透明/内容缺失 —— 覆盖层用普通
+   Item(Rectangle)随主窗口一起渲染与截图;`ApplicationWindow` 的子项只
+   铺满 contentItem(页眉页脚之外),故遮罩不覆盖标题栏/工具栏/状态栏
+   (窗口按钮保持可点,校验脚本据此断言"标题栏/状态栏未被覆盖")
+8. **覆盖层必须显式 `anchors.fill: parent`,且打开时自持焦点处理 Esc**:
+   漏掉填充会导致尺寸 0×0、卡片宽高为负(只剩错位子文本);窗口级快捷键
+   在焦点被覆盖层/弹窗接管时收不到按键(带 escapePressed 的项会先接受
+   ShortcutOverride),故 Esc 由覆盖层 `Keys.onEscapePressed` 处理,
+   main.qml 的同名 Shortcut 仅作兜底
 
 ## 界面风格
 
@@ -101,14 +116,20 @@
 .\tools\sync-build.ps1                 # 同步 + 远程构建
 .\tools\sync-build.ps1 -Smoke          # + 无头自测(模型断言 + QML 几何断言)
 .\tools\sync-build.ps1 -Shot           # + xvfb 截图回传 + 像素级布局验证
+.\tools\sync-build.ps1 -Shot -Help     # + 帮助页截图(--open-help)与覆盖层像素校验
 .\tools\sync-build.ps1 -Clean          # 强制清空远程构建目录
 ```
 
 - 远程源在 `~/xmlviewer`,构建在 `~/xmlviewer-build`,可执行文件 `~/xmlviewer-build/xmlviewer`
   (已内嵌 RPATH,直接运行,无需 LD_LIBRARY_PATH)
 - smoke 通过标准:全部模型/QML 断言 PASS 且 QML 警告为 0,输出 `SMOKE OK`
+  (含帮助页断言:openHelp 可见/持焦点/关闭遗留面板、Esc 投递焦点项即关闭、
+  F1 平台按键路径可打开、close 幂等)
 - 截图为 `artifacts\xmlviewer.png`;`tools\verify-shot.ps1` 按已知分段颜色逐像素
   校验布局与理论位级几何一致(输出 `SHOT-VERIFY OK`)
+- `-Help` 另截 `artifacts\xmlviewer_help.png`(--open-help),`tools\check-help.ps1`
+  校验卡片白底居中/标题正文绘制/滚动条/遮罩压暗内容区且标题栏与状态栏未被覆盖
+  (输出 `HELP-SHOT OK`);`-Help` 隐含 `-Shot`(需同尺寸主截图作遮罩基准)
 
 ## 运行
 
@@ -178,16 +199,18 @@ src/barlayout.*         行布局计算:按视口宽度折行,字段切成行段
 src/filedialoghelper.*  QFileDialog 封装(Qt 5.15 无 Controls2 FileDialog)
 src/pinyin.*            中文名→拼音:ICU 运行时探测 + 内置码表双路径
 src/pinyin_data.cpp     内置拼音码表(gen-pinyin.ps1 生成,勿手改;mozillazg/pinyin-data MIT)
-src/main.cpp            QApplication + 上下文属性 + --smoke/--screenshot
+src/main.cpp            QApplication + 上下文属性 + --smoke/--screenshot(--open-panel/--open-help)
 qml/main.qml            窗口骨架:工具栏/快捷键/状态条/对话框/smokeCheck
 qml/MessageBar.qml      柱状图宿主:多行渲染(行背景/网格/标尺/段/插入点/右键菜单)
 qml/Segment.qml         行段 delegate(Canvas 绘制,撕口画在段端部,required 角色绑定)
 qml/InsertPoint.qml     悬停 "+" 插入点(required 角色绑定定位)
 qml/InlinePanel.qml     就地属性编辑面板(点击段后段附近弹出)
 qml/MessageListPanel.qml 左侧报文卡片列表(迷你结构预览/新建/删除/重命名)
+qml/HelpPage.qml        使用帮助页(窗口内覆盖层:遮罩 + 卡片 + ScrollView,含快捷键表)
 qml/LayoutMath.js       位→像素坐标纯函数(所有元素共用,防缝隙)
 tools/sync-build.ps1    一键同步+构建+验证
 tools/verify-shot.ps1   截图像素级布局验证(锚定行带 + 撕纸标记检测)
+tools/check-help.ps1    帮助页截图像素校验(卡片白底居中/标题正文/滚动条/遮罩变暗)
 tools/gen-pinyin.ps1    从 pinyin-data.txt 生成 src/pinyin_data.cpp(需先下载数据源)
 tools/pinyin-data.txt   拼音码表数据源(mozillazg/pinyin-data,MIT)
 tools/pinyin-data-LICENSE.txt 数据源许可证

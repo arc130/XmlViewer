@@ -3,8 +3,11 @@
 #   .\tools\sync-build.ps1                仅同步+构建
 #   .\tools\sync-build.ps1 -Smoke         构建后跑无头自测
 #   .\tools\sync-build.ps1 -Shot          构建后截图回传到 artifacts\xmlviewer.png
+#   .\tools\sync-build.ps1 -Help          再截帮助页(--open-help)并做覆盖层像素校验
 #   .\tools\sync-build.ps1 -Clean         强制清空远程构建目录
-param([switch]$Clean, [switch]$Smoke, [switch]$Shot, [string]$Size = "1280x800")
+param([switch]$Clean, [switch]$Smoke, [switch]$Shot, [switch]$Help, [string]$Size = "1280x800")
+
+if ($Help) { $Shot = $true }   # 帮助页校验需要同尺寸的主截图作基准
 
 $ErrorActionPreference = "Stop"
 $R = "ac130@127.0.0.1"
@@ -57,6 +60,18 @@ if ($Shot) {
     Write-Output "== 像素级布局验证 =="
     powershell -ExecutionPolicy Bypass -File "$S/tools/verify-shot.ps1" "$S/artifacts/xmlviewer.png"
     if ($LASTEXITCODE -ne 0) { Write-Error "截图布局验证失败"; exit 1 }
+}
+
+if ($Help) {
+    Write-Output "== help overlay screenshot (--open-help, xvfb-run)"
+    ssh $R "cd $build && QT_QUICK_BACKEND=software xvfb-run -a -s '-screen 0 1920x1080x24' timeout 40 ./xmlviewer --screenshot /tmp/xmlviewer_help.png --size $Size --open-help"
+    if ($LASTEXITCODE -ne 0) { Write-Error "help screenshot failed"; exit 1 }
+    scp "${R}:/tmp/xmlviewer_help.png" "$S/artifacts/xmlviewer_help.png" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "help screenshot copy failed" }
+    Write-Output "help screenshot saved: $S\artifacts\xmlviewer_help.png"
+    Write-Output "== help overlay pixel verification =="
+    powershell -ExecutionPolicy Bypass -File "$S/tools/check-help.ps1" "$S/artifacts/xmlviewer_help.png" "$S/artifacts/xmlviewer.png"
+    if ($LASTEXITCODE -ne 0) { Write-Error "help overlay verification failed"; exit 1 }
 }
 
 Write-Output "SYNC-BUILD OK"
